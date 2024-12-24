@@ -50,7 +50,7 @@ h1 {
     height: 100vh;
 }
 
-#web-gpu-error {
+#error {
     position: fixed;
     top: 50px;
     left: 0;
@@ -58,6 +58,19 @@ h1 {
     text-align: center;
     display: none;
     z-index: 999;
+
+    user-select: none;
+}
+
+#fps {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+
+    color: darkgrey;
+    z-index: 999;
+
+    user-select: none;
 }
 
 
