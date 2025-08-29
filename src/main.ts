@@ -6,35 +6,35 @@ import {Segment} from "./segment.ts";
 import {fps} from "./util.ts";
 import {TinyColor} from "@ctrl/tinycolor";
 
-const cSpring: number = 6
+const cSpring: number = 5
 
 const vMin: number = 0
 const vMax: number = 100
 
 const aMax: number = 2
 
-const aDamp: number = 1.3
+const aDamp: number = 2.5
 const vDamp: number = 2.0
 
 const activenessMin: number = 0.01
-const activenessMax: number = 0.02
+const activenessMax: number = 0.05
 
-const fMouse: number = 50.0
-const fActive: number = 25.0
-
-const lengthMin: number = 5
-const lengthMax: number = 10
+const fMouse: number = 75.0
+const fActive: number = 200.0
 
 const scale: number = 1.0
 const sizeMin: number = scale * 0.005
-const sizeMax: number = scale * 0.01
+const sizeMax: number = scale * 0.02
 
-const thinnessMin: number = 0.1
-const thinnessMax: number = 0.75
+// 0 < thickness < 1
+const thicknessMin: number = 0.95
+const thicknessMax: number = 0.4
 
 const boundaryThreshold: number = 0.01
 
 const nEntities = 500
+const lengthMin: number = 5
+const lengthMax: number = 15
 
 class Entity {
     readonly color: vec3
@@ -58,7 +58,7 @@ class Entity {
         this.segments = new Array<Segment>(length)
         for (let i = 0; i < length; i++) {
             this.segments[i] = new Segment(
-                size * Math.exp(-thinness * i),
+                size * Math.exp(-(1 - thinness) * i),
                 vec2.clone(p0),
                 vec2.create(),
             )
@@ -160,7 +160,6 @@ function setup(webGpu: WebGpu) {
     // FIXME: In theory checking if we actually use all segments could improve performance
     // const nSegments = Math.max(...entities.map(w => w.length))
     const nSegments = lengthMax
-
 
     const canvas = webGpu.canvas
     const gpu = webGpu.gpu
@@ -354,8 +353,8 @@ function setup(webGpu: WebGpu) {
 
         const length = Math.floor(lengthMin + Math.random() * (lengthMax - lengthMin))
         const size = sizeMin + Math.random() * (sizeMax - sizeMin)
-        const thinness = thinnessMin + Math.random() * (thinnessMax - thinnessMin)
-        const laziness = activenessMin + Math.random() * (activenessMax - activenessMin)
+        const thickness = thicknessMin + Math.random() * (thicknessMax - thicknessMin)
+        const activeness = activenessMin + Math.random() * (activenessMax - activenessMin)
 
         const h = Math.random() * 360.0
         const s = 50. + Math.random() * 50.
@@ -367,8 +366,8 @@ function setup(webGpu: WebGpu) {
             length,
             vec3.fromValues(color.r / 255.0, color.g / 255.0, color.b / 255.0),
             size,
-            thinness,
-            laziness
+            thickness,
+            activeness
         )
     }
 
