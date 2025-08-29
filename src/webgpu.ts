@@ -77,13 +77,9 @@ export async function webGpuMain(
         return
     }
 
-    // function loop() {
-    //     requestAnimationFrame(loop)
-    //     renderFunction()
-    // }
-    // requestAnimationFrame(loop)
-
-    while (true) {
-        await renderFunction()
+    function loop() {
+        requestAnimationFrame(loop)
+        renderFunction()
     }
+    requestAnimationFrame(loop)
 }
