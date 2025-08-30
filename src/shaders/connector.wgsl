@@ -1,4 +1,8 @@
 const atan2Y = atan2(0.0, 1.0);
+const atan2X = atan2(1.0, 0.0);
+
+const LINE_WIDTH = 0.12;
+const COLOR_FACTOR = 0.95;
 
 struct Globals {
     segments: u32,
@@ -46,30 +50,42 @@ fn vertex_main(
     let segmentIndex = instanceIndex % segments;
     let entityData = entitiesData[entityIndex];
 
-    let length = entityData.length;
-    out.shouldDiscard = length - segmentIndex;
+    if (entityData.length - 1 <= segmentIndex) {
+        out.shouldDiscard = 0; // value > 0 means discard
+        return out;
+    }
 
-    let segmentData = segmentsData[instanceIndex];
-    let offset = segmentData.position;
-    let velocity = segmentData.velocity;
-    let radians = atan2(velocity.y, velocity.x) - atan2Y;
+    let seg1 = segmentsData[instanceIndex];
+    let seg2 = segmentsData[instanceIndex + 1];
+
+    let width = seg2.size * LINE_WIDTH;
+
+    let p1 = seg1.position;
+    let p2 = seg2.position;
+
+    let center = (p1 + p2) / 2;
+    let dir = (p1 - p2) / 2;
+    let radians = atan2(dir.y, dir.x) - atan2X;
+
+    let dist = length(dir);
+    let s1 = vec4<f32>(width, 0.0, 0.0, 0.0);
+    let s2 = vec4<f32>(0.0, dist, 0.0, 0.0);
+    let s3 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+    let s4 = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let sMatrix = mat4x4<f32>(s1, s2, s3, s4);
 
     let c1 = vec4<f32>( cos(radians), sin(radians), 0.0, 0.0);
     let c2 = vec4<f32>(-sin(radians), cos(radians), 0.0, 0.0);
     let c3 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
-    let c4 = vec4<f32>(offset.x, offset.y, 0.0, 1.0);
+    let c4 = vec4<f32>(center.x, center.y, 0.0, 1.0);
     let mMatrix = mat4x4<f32>(c1, c2, c3, c4);
 
-    let size = segmentData.size;
-
-    let m = vpMatrix * mMatrix;
-    let local = position.xy * size;
+    let m = vpMatrix * mMatrix * sMatrix;
+    let local = position.xy;
     out.position = m * vec4(local, 0.0, 1.0);
 
-    // FIXME: mostly for testing
     let kColor = 1.0 - f32(segmentIndex) / f32(segments - 1) / 2.0;
-    out.color = vec4<f32>(entityData.color * kColor, 1.0);
-
+    out.color = vec4<f32>(entityData.color * kColor * COLOR_FACTOR, 1.0);
     return out;
 }
 

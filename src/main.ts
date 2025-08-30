@@ -1,12 +1,13 @@
 import './style.css'
-import shader from './shaders/basic.wgsl?raw'
+import SegmentShader from './shaders/segment.wgsl?raw'
+import LineShader from './shaders/connector.wgsl?raw'
 import {WebGpu, webGpuMain} from "./webgpu.ts";
 import {mat4, vec2, vec3} from "gl-matrix";
 import {Segment} from "./segment.ts";
 import {fps} from "./util.ts";
 import {TinyColor} from "@ctrl/tinycolor";
 
-const cSpring: number = 5
+const cSpring: number = 20
 
 const vMin: number = 0
 const vMax: number = 100
@@ -23,8 +24,8 @@ const fMouse: number = 75.0
 const fActive: number = 200.0
 
 const scale: number = 1.0
-const sizeMin: number = scale * 0.005
-const sizeMax: number = scale * 0.02
+const sizeMin: number = scale * 0.1
+const sizeMax: number = scale * 0.2
 
 // 0 < thickness < 1
 const thicknessMin: number = 0.95
@@ -32,9 +33,12 @@ const thicknessMax: number = 0.4
 
 const boundaryThreshold: number = 0.01
 
-const nEntities = 500
-const lengthMin: number = 5
-const lengthMax: number = 15
+const nEntities = 1
+const lengthMin: number = 8
+const lengthMax: number = 8
+// const nEntities = 500
+// const lengthMin: number = 5
+// const lengthMax: number = 15
 
 class Entity {
     readonly color: vec3
@@ -83,7 +87,7 @@ class Entity {
         }
 
         // random movement
-        if (Math.random() < this.activeness || vec2.len(head.v) <= vMin) {
+        if (Math.random() < this.activeness || vec2.len(head.v) < vMin) {
             vec2.add(dA, dA, vec2.random(vec2.create(), (0.5 + Math.random() * 0.5) * fActive / mass))
         }
 
@@ -205,35 +209,56 @@ function setup(webGpu: WebGpu) {
         }
     ]
 
-    const shaderModule = device.createShaderModule({
-        code: shader
+    const segmentShaderModule = device.createShaderModule({
+        code: SegmentShader
+    })
+    const lineShaderModule = device.createShaderModule({
+        code: LineShader
     })
 
-    const pipelineDescriptor: GPURenderPipelineDescriptor = {
-        vertex: {
-            module: shaderModule,
-            entryPoint: "vertex_main",
-            buffers: vertexBuffers,
-        },
-        fragment: {
-            module: shaderModule,
-            entryPoint: "fragment_main",
-            targets: [
-                {
-                    format: gpu.getPreferredCanvasFormat(),
-                }
-            ]
-        },
-        primitive: {
-            topology: "triangle-list",
-        },
-        multisample: {
-            count: 4,
-        },
-        layout: "auto",
+    function createPipelineDescriptor(module: GPUShaderModule): GPURenderPipelineDescriptor {
+        return  {
+            vertex: {
+                module: module,
+                entryPoint: "vertex_main",
+                buffers: vertexBuffers,
+            },
+            fragment: {
+                module: module,
+                entryPoint: "fragment_main",
+                targets: [
+                    {
+                        format: gpu.getPreferredCanvasFormat(),
+                        blend: {
+                            // Think: We only apply colors if there's nothing there yet, so we can just render everything in order.
+                            //        We could instead also render lines first and then segments in revers, and just always "overwrite".
+                            color: {
+                                srcFactor: 'one-minus-dst-alpha',
+                                dstFactor: 'one',
+                            },
+                            alpha: {
+                                srcFactor: 'one-minus-dst-alpha',
+                                dstFactor: 'one',
+                            }
+                        },
+                    }
+                ]
+            },
+            primitive: {
+                topology: "triangle-list",
+            },
+            multisample: {
+                count: 4,
+            },
+            layout: "auto",
+        }
     }
 
-    const pipeline = device.createRenderPipeline(pipelineDescriptor)
+    const segmentPipelineDescriptor = createPipelineDescriptor(segmentShaderModule)
+    const segmentPipeline = device.createRenderPipeline(segmentPipelineDescriptor)
+
+    const linePipelineDescriptor = createPipelineDescriptor(lineShaderModule)
+    const linePipeline = device.createRenderPipeline(linePipelineDescriptor)
 
     const goSegments = 0
     const goVpMatrix = 16
@@ -267,30 +292,35 @@ function setup(webGpu: WebGpu) {
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     })
 
-    const bindGroup = device.createBindGroup({
-        label: 'Uniform Bind Group',
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: globalsBuffer,
+    function createBindGroup(pipeline: GPURenderPipeline) : GPUBindGroup {
+        return device.createBindGroup({
+            label: 'Uniform Bind Group',
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                {
+                    binding: 0,
+                    resource: {
+                        buffer: globalsBuffer,
+                    },
                 },
-            },
-            {
-                binding: 1,
-                resource: {
-                    buffer: entityDataBuffer,
+                {
+                    binding: 1,
+                    resource: {
+                        buffer: entityDataBuffer,
+                    },
                 },
-            },
-            {
-                binding: 2,
-                resource: {
-                    buffer: segmentDataBuffer,
+                {
+                    binding: 2,
+                    resource: {
+                        buffer: segmentDataBuffer,
+                    },
                 },
-            },
-        ]
-    })
+            ]
+        })
+    }
+
+    const lineBindGroup = createBindGroup(linePipeline)
+    const segmentBindGroup = createBindGroup(segmentPipeline)
 
     let multisampleTexture: GPUTexture
     let size = {width: 0.0, height: 0.0}
@@ -328,28 +358,49 @@ function setup(webGpu: WebGpu) {
     onresize = onResize
     onResize()
 
-    let mousePos = vec2.fromValues(0.0, 0.0)
-    onmousemove = (e) => {
+    function getMousePos(e: MouseEvent): vec2 {
         const [bx, by] = bounds
         let x = (-1.0 + (e.clientX / visualViewport!.width * 2.0)) * bx
         let y = (+1.0 - (e.clientY / visualViewport!.height * 2.0)) * by
-        mousePos = vec2.fromValues(x, y)
+        return vec2.fromValues(x, y)
     }
 
     let mouseDown = false
-    onmousedown = (_) => {
-        mouseDown = true
+    let mousePos = vec2.fromValues(0.0, 0.0)
+
+    onmousedown = (e) => {
+        mousePos = getMousePos(e)
+        if (e.button === 0) {
+            mouseDown = true
+        }
     }
-    onmouseup = (_) => {
-        mouseDown = false
+    onmouseup = (e) => {
+        if (e.button === 0) {
+            mouseDown = false
+        }
     }
+
+    onmousemove = (e) => {
+        mousePos = getMousePos(e)
+    }
+
+    let paused = true // FIXME: Debug
+    onkeydown = (e) => {
+        if (e.key == ' ') {
+            paused = !paused
+        }
+    }
+
+    let viewTransform = mat4.create();
 
     const entities: Array<Entity> = new Array(nEntities)
     for (let i = 0; i < nEntities; i++) {
-        const [bx, by] = bounds!
-        const px = -bx + 2.0 * Math.random() * bx
-        const py = -by + 2.0 * Math.random() * by
-        const pos = vec2.fromValues(px, py)
+
+        const pos = vec2.fromValues(0.0, 0.0) // FIXME: Debug
+        // const [bx, by] = bounds!
+        // const px = -bx + 2.0 * Math.random() * bx
+        // const py = -by + 2.0 * Math.random() * by
+        // const pos = vec2.fromValues(px, py)
 
         const length = Math.floor(lengthMin + Math.random() * (lengthMax - lengthMin))
         const size = sizeMin + Math.random() * (sizeMax - sizeMin)
@@ -358,8 +409,8 @@ function setup(webGpu: WebGpu) {
 
         const h = Math.random() * 360.0
         const s = 50. + Math.random() * 50.
-        const v = 20. + Math.random() * 60.
-        const color = new TinyColor(`hsv(${h}, ${s}%, ${v}%)`)
+        const l = 30. + Math.random() * 60.
+        const color = new TinyColor(`hsl(${h}, ${s}%, ${l}%)`)
 
         entities[i] = new Entity(
             pos,
@@ -397,9 +448,11 @@ function setup(webGpu: WebGpu) {
         raFrameTime = ((raFrameTime * 100) + dt) / (101)
         fps(1.0 / raFrameTime)
 
+        if (paused) dt = 0;
+
 
         const commandEncoder = device.createCommandEncoder()
-        const clearColor: GPUColor = {r: 0.1, g: 0.1, b: 0.2, a: 1.0}
+        const clearColor: GPUColor = {r: 0.0, g: 0.0, b: 0.0, a: 0.0}
 
         const passDescriptor: GPURenderPassDescriptor = {
             colorAttachments: [
@@ -415,8 +468,8 @@ function setup(webGpu: WebGpu) {
         }
 
         // apply aspect ratio
-        const vpMatrix = mat4.create();
-        mat4.scale(vpMatrix, vpMatrix, vec3.fromValues(1.0 / aspect, 1.0, 1.0))
+        let vpMatrix = mat4.create()
+        mat4.scale(vpMatrix, viewTransform, vec3.fromValues(1.0 / aspect, 1.0, 1.0))
         device.queue.writeBuffer(globalsBuffer, goVpMatrix, vpMatrix as Float32Array)
 
         for (let i = 0; i < entities.length; i++) {
@@ -433,13 +486,21 @@ function setup(webGpu: WebGpu) {
         }
 
         const pass = commandEncoder.beginRenderPass(passDescriptor)
-        pass.setPipeline(pipeline)
-        pass.setBindGroup(0, bindGroup)
+        // connectors
+        pass.setPipeline(segmentPipeline)
+        pass.setBindGroup(0, segmentBindGroup)
         pass.setVertexBuffer(0, vertexBuffer)
         pass.setIndexBuffer(indexBuffer, 'uint32')
         pass.drawIndexed(6, nSegments * entities.length)
-        pass.end()
 
+        // segments
+        pass.setPipeline(linePipeline)
+        pass.setBindGroup(0, lineBindGroup)
+        pass.setVertexBuffer(0, vertexBuffer)
+        pass.setIndexBuffer(indexBuffer, 'uint32')
+        pass.drawIndexed(6, nSegments * entities.length)
+
+        pass.end()
         device.queue.submit([commandEncoder.finish()])
         return device.queue.onSubmittedWorkDone()
     }
