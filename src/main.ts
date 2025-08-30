@@ -7,75 +7,110 @@ import {Segment} from "./segment.ts";
 import {fps} from "./util.ts";
 import {TinyColor} from "@ctrl/tinycolor";
 
-const cSpring: number = 20
+class Range {
+    readonly min: number
+    readonly max: number
 
-const vMin: number = 0
-const vMax: number = 100
+    constructor(min: number, max: number, scale: number = 1.0) {
+        this.min = min * scale
+        this.max = max * scale
+    }
 
-const aMax: number = 2
+    public random(): number {
+        return this.min + (this.max - this.min) * Math.random()
+    }
+}
 
-const aDamp: number = 2.5
-const vDamp: number = 2.0
+const settings = {
+    // "style"
+    nEntities: 500, // fps tend to die if > 500
+    size: new Range(0.01, 0.02, 2.0),
+    length: new Range(5, 15),
+    thickness: new Range(0.1, 0.5),
 
-const activenessMin: number = 0.01
-const activenessMax: number = 0.05
+    // "personality"
+    activeness: new Range(0.001, 0.005),
+    strength: new Range(0.8, 1.0),
 
-const fMouse: number = 75.0
-const fActive: number = 200.0
+    // forces
+    kSpring: 15,
+    fMouse: 25.0,
+    fActive: 1000.0,
+    boundaryForce: 10000,
+    boundaryThreshold: 0.1,
 
-const scale: number = 1.0
-const sizeMin: number = scale * 0.1
-const sizeMax: number = scale * 0.2
+    // dampening
+    aDamp: 3,
+    vDamp: 1.0,
 
-// 0 < thickness < 1
-const thicknessMin: number = 0.95
-const thicknessMax: number = 0.4
+    // limits
+    aMax: 10,
+    vMin: 0.005,
+    vMax: 1,
 
-const boundaryThreshold: number = 0.01
+    // max time step size
+    simMaxDt: 0.005,
+}
 
-const nEntities = 1
-const lengthMin: number = 8
-const lengthMax: number = 8
-// const nEntities = 500
-// const lengthMin: number = 5
-// const lengthMax: number = 15
 
 class Entity {
-    readonly color: vec3
-
     readonly length: number
     readonly segments: Segment[]
 
-    readonly a: vec2
-    readonly activeness: number
+    readonly color: vec3
+
+    private readonly a: vec2
+    private readonly activeness: number
+    private activity: number
+
+    private readonly mass: number
 
     constructor(
         p0: vec2,
         length: number,
         color: vec3,
         size: number,
-        thinness: number,
+        strength: number,
+        thickness: number,
         activeness: number
     ) {
         this.color = color
         this.length = length
         this.segments = new Array<Segment>(length)
+
         for (let i = 0; i < length; i++) {
             this.segments[i] = new Segment(
-                size * Math.exp(-(1 - thinness) * i),
+                size * Math.exp(-(1 - thickness) * i),
                 vec2.clone(p0),
                 vec2.create(),
             )
         }
 
+        let mass = 0.0
+        for (let s of this.segments) {
+            mass += s.size / settings.size.max
+        }
+
+        // We use strength as a constant to counteract the fact that as we do consider mass
+        // but use constant external forces which makes its hard to find a good configuration
+        // for large *and* small entities at once.
+        // This basically removes the mass from F = m * a by introducing F' = F * s = m * a
+        // with s ~ m
+        // FIXME: figure out a way to make this nicely proportional
+        //        to mass and length.
+        //        For now: strength is only relative to size of the head
+        //                 meaning a longer worm is less strong
+        const kMass = strength * size / settings.size.min
+        this.mass = mass / kMass
+        // console.log(this.mass, mass, strength, size)
+
         this.a = vec2.create()
         this.activeness = activeness
+        this.activity = 1.0
     }
 
     public update(dt: number, mousePos: vec2, mouseDown: boolean, bounds: vec2) {
         const head = this.segments[0]
-        const mass = head.size / sizeMin
-
         let dA = vec2.create()
 
         if (mouseDown) {
@@ -83,41 +118,43 @@ class Entity {
             const len = vec2.len(dir)
             const dirN = vec2.normalize(vec2.create(), dir)
 
-            vec2.add(dA, dA, vec2.scale(vec2.create(), dirN, Math.min(len, 1.0) * fMouse / mass))
+            vec2.add(dA, dA, vec2.scale(vec2.create(), dirN, Math.min(len, 1.0) * settings.fMouse / this.mass))
         }
 
         // random movement
-        if (Math.random() < this.activeness || vec2.len(head.v) < vMin) {
-            vec2.add(dA, dA, vec2.random(vec2.create(), (0.5 + Math.random() * 0.5) * fActive / mass))
+        this.activity += Math.random() * this.activeness
+        if (1.0 <= this.activity || vec2.len(head.v) <= settings.vMin) {
+            this.activity = 0
+            vec2.add(dA, dA, vec2.random(vec2.create(), (0.5 + Math.random() * 0.5) * settings.fActive / this.mass))
+            // console.log("Being active", dA[0], dA[1], dt)
         }
+
+        // improved bounding box handling. this does not "crash into walls" but instead
+        // attempts to avoid them.
+        const [bx, by] = bounds
+        const [px, py] = head.p
+
+        const threshold = 1.0 - settings.boundaryThreshold
+        const nx = Math.max(0.0, Math.min(Math.abs(px) / bx, 1.0) - threshold)
+        const ny = Math.max(0.0, Math.min(Math.abs(py) / by, 1.0) - threshold)
+        const aBounds = vec2.fromValues(-Math.sign(px) * nx, -Math.sign(py) * ny)
+        vec2.add(dA, dA, vec2.scale(aBounds, aBounds, settings.boundaryForce / this.mass * dt))
 
         // update acceleration
         vec2.add(this.a, this.a, vec2.scale(vec2.create(), dA, dt))
         const aN = vec2.len(this.a)
-        if (aN != 0 && aMax < aN) {
-            vec2.scale(this.a, this.a, aMax / aN)
+        if (aN != 0 && settings.aMax < aN) {
+            vec2.scale(this.a, this.a, settings.aMax / aN)
+            // console.log("Too many gs")
         }
 
         vec2.add(head.v, head.v, vec2.scale(vec2.create(), this.a, dt))
 
-        // improved bounding box handling
-        const [bx, by] = bounds
-        const [px, py] = head.p
-
-        const threshold = 1.0 - boundaryThreshold
-        const nx = Math.max(0.0, Math.min(Math.abs(px) / bx, 1.0) - threshold)
-        const ny = Math.max(0.0, Math.min(Math.abs(py) / by, 1.0) - threshold)
-
-        const vBoundsAversion = vec2.fromValues(-Math.sign(px) * nx, -Math.sign(py) * ny)
-        vec2.scale(vBoundsAversion, vBoundsAversion, vMax * dt)
-
-        // update velocity
-        vec2.add(head.v, head.v, vBoundsAversion)
-
         // limit velocity
         const vN = vec2.len(head.v)
-        if (vN != 0 && vMax < vN) {
-            vec2.scale(head.v, head.v, vMax / vN)
+        if (vN != 0 && settings.vMax < vN) {
+            vec2.scale(head.v, head.v, settings.vMax / vN)
+            // console.log("Too fast")
         }
 
         vec2.add(head.p, head.p, vec2.add(
@@ -128,8 +165,8 @@ class Entity {
 
         // Decay acceleration and velocity
         // FIXME: Give this a proper 'unit'
-        vec2.scale(this.a, this.a, 1 / (1.0 + aDamp * dt))
-        vec2.scale(head.v, head.v, 1 / (1.0 + vDamp * dt))
+        vec2.scale(this.a, this.a, 1 / (1.0 + settings.aDamp * dt))
+        vec2.scale(head.v, head.v, 1 / (1.0 + settings.vDamp * dt))
 
         if (this.length < 2) return
 
@@ -149,11 +186,11 @@ class Entity {
             vec2.scale(
                 seg.v,
                 dp,
-                cSpring * le,
+                settings.kSpring * le,
             )
 
             vec2.add(seg.p, seg.p, vec2.scale(vec2.create(), seg.v, dt))
-            vec2.scale(seg.v, seg.v, 1 / (1.0 + vDamp * dt))
+            vec2.scale(seg.v, seg.v, 1 / (1.0 + settings.vDamp * dt))
 
             prev = seg
         }
@@ -163,7 +200,7 @@ class Entity {
 function setup(webGpu: WebGpu) {
     // FIXME: In theory checking if we actually use all segments could improve performance
     // const nSegments = Math.max(...entities.map(w => w.length))
-    const nSegments = lengthMax
+    const nSegments = settings.length.max
 
     const canvas = webGpu.canvas
     const gpu = webGpu.gpu
@@ -217,7 +254,7 @@ function setup(webGpu: WebGpu) {
     })
 
     function createPipelineDescriptor(module: GPUShaderModule): GPURenderPipelineDescriptor {
-        return  {
+        return {
             vertex: {
                 module: module,
                 entryPoint: "vertex_main",
@@ -277,7 +314,7 @@ function setup(webGpu: WebGpu) {
     const edbStride = 4 * 4 + 4 * 4 // must be aligned to 16x
     const entityDataBuffer = device.createBuffer({
         label: 'Entity Data Buffer',
-        size: edbStride * nEntities,
+        size: edbStride * settings.nEntities,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     })
 
@@ -288,11 +325,11 @@ function setup(webGpu: WebGpu) {
     const sdbStride = 8 + 8 + 8 // must be aligned to 8
     const segmentDataBuffer = device.createBuffer({
         label: 'Segment Data Buffer',
-        size: sdbStride * nEntities * nSegments,
+        size: sdbStride * settings.nEntities * nSegments,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     })
 
-    function createBindGroup(pipeline: GPURenderPipeline) : GPUBindGroup {
+    function createBindGroup(pipeline: GPURenderPipeline): GPUBindGroup {
         return device.createBindGroup({
             label: 'Uniform Bind Group',
             layout: pipeline.getBindGroupLayout(0),
@@ -384,7 +421,7 @@ function setup(webGpu: WebGpu) {
         mousePos = getMousePos(e)
     }
 
-    let paused = true // FIXME: Debug
+    let paused = false
     onkeydown = (e) => {
         if (e.key == ' ') {
             paused = !paused
@@ -393,19 +430,12 @@ function setup(webGpu: WebGpu) {
 
     let viewTransform = mat4.create();
 
-    const entities: Array<Entity> = new Array(nEntities)
-    for (let i = 0; i < nEntities; i++) {
-
-        const pos = vec2.fromValues(0.0, 0.0) // FIXME: Debug
-        // const [bx, by] = bounds!
-        // const px = -bx + 2.0 * Math.random() * bx
-        // const py = -by + 2.0 * Math.random() * by
-        // const pos = vec2.fromValues(px, py)
-
-        const length = Math.floor(lengthMin + Math.random() * (lengthMax - lengthMin))
-        const size = sizeMin + Math.random() * (sizeMax - sizeMin)
-        const thickness = thicknessMin + Math.random() * (thicknessMax - thicknessMin)
-        const activeness = activenessMin + Math.random() * (activenessMax - activenessMin)
+    const entities: Array<Entity> = new Array(settings.nEntities)
+    for (let i = 0; i < settings.nEntities; i++) {
+        const [bx, by] = bounds!
+        const px = -bx + 2.0 * Math.random() * bx
+        const py = -by + 2.0 * Math.random() * by
+        const pos = vec2.fromValues(px, py)
 
         const h = Math.random() * 360.0
         const s = 50. + Math.random() * 50.
@@ -414,11 +444,12 @@ function setup(webGpu: WebGpu) {
 
         entities[i] = new Entity(
             pos,
-            length,
+            Math.floor(settings.length.random()),
             vec3.fromValues(color.r / 255.0, color.g / 255.0, color.b / 255.0),
-            size,
-            thickness,
-            activeness
+            settings.size.random(),
+            settings.strength.random(),
+            settings.thickness.random(),
+            settings.activeness.random(),
         )
     }
 
@@ -436,20 +467,21 @@ function setup(webGpu: WebGpu) {
         }
     }
 
-    let raFrameTime = 0
     let t0: number
+    let raFrameTime = 0
+    let raFrameTimeFilter = 100
 
-    return function render() {
+    return async function render() {
         const t1 = Date.now()
         if (t0 == null) t0 = t1
         let dt = (t1 - t0) / 1000
         t0 = t1
 
-        raFrameTime = ((raFrameTime * 100) + dt) / (101)
+        raFrameTime = ((raFrameTime * raFrameTimeFilter) + dt) / (raFrameTimeFilter + 1)
         fps(1.0 / raFrameTime)
 
+        if (dt == 0) return; // skip first frame
         if (paused) dt = 0;
-
 
         const commandEncoder = device.createCommandEncoder()
         const clearColor: GPUColor = {r: 0.0, g: 0.0, b: 0.0, a: 0.0}
@@ -474,13 +506,20 @@ function setup(webGpu: WebGpu) {
 
         for (let i = 0; i < entities.length; i++) {
             const entity = entities[i]
-            entity.update(dt, mousePos, mouseDown, bounds)
+
+            // frame times are very unstable so we need to split time steps if they get too big
+            let mDt = dt
+            while (settings.simMaxDt <= mDt) {
+                entity.update(settings.simMaxDt, mousePos, mouseDown, bounds)
+                mDt -= settings.simMaxDt
+            }
+            entity.update(mDt, mousePos, mouseDown, bounds)
 
             for (let j = 0; j < entity.segments.length; j++) {
                 const seg = entity.segments[j]
 
                 const sdbOffset = (i * nSegments + j) * sdbStride
-                device.queue.writeBuffer(segmentDataBuffer, sdbOffset + sdbPosition,  seg.p as Float32Array)
+                device.queue.writeBuffer(segmentDataBuffer, sdbOffset + sdbPosition, seg.p as Float32Array)
                 device.queue.writeBuffer(segmentDataBuffer, sdbOffset + sdbVelocity, seg.v as Float32Array)
             }
         }
