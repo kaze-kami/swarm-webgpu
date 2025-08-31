@@ -425,8 +425,8 @@ function setup(webGpu: WebGpu) {
     }
 
     let t0: number
-    let raFrameTime = 0
-    let raFrameTimeFilter = 100
+    let frameTimeSmooth = 0
+    let frameTimeSmoothing = 20
 
     return async function render() {
         const t1 = Date.now()
@@ -434,8 +434,8 @@ function setup(webGpu: WebGpu) {
         let dt = (t1 - t0) / 1000
         t0 = t1
 
-        raFrameTime = ((raFrameTime * raFrameTimeFilter) + dt) / (raFrameTimeFilter + 1)
-        fps(1.0 / raFrameTime)
+        frameTimeSmooth = ((frameTimeSmooth * frameTimeSmoothing) + dt) / (frameTimeSmoothing + 1)
+        fps(1.0 / frameTimeSmooth)
 
         if (dt == 0) return; // skip first frame
         if (paused) dt = 0;
