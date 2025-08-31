@@ -1,5 +1,3 @@
-const atan2Y = atan2(0.0, 1.0);
-
 struct Globals {
     segments: u32,
     vpMatrix: mat4x4<f32>,
@@ -56,7 +54,7 @@ fn vertex_main(
     let segmentData = segmentsData[instanceIndex];
     let offset = segmentData.position;
     let velocity = segmentData.velocity;
-    let radians = atan2(velocity.y, velocity.x) - atan2Y;
+    let radians = atan2(velocity.y, velocity.x); // - atan(0.0, 1.0) = 0;
 
     let c1 = vec4<f32>( cos(radians), sin(radians), 0.0, 0.0);
     let c2 = vec4<f32>(-sin(radians), cos(radians), 0.0, 0.0);

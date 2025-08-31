@@ -1,6 +1,3 @@
-const atan2Y = atan2(0.0, 1.0);
-const atan2X = atan2(1.0, 0.0);
-
 const LINE_WIDTH = 0.12;
 const COLOR_FACTOR = 0.95;
 
@@ -65,7 +62,7 @@ fn vertex_main(
 
     let center = (p1 + p2) / 2;
     let dir = (p1 - p2) / 2;
-    let radians = atan2(dir.y, dir.x) - atan2X;
+    let radians = atan2(dir.y, dir.x) - radians(90);
 
     let dist = length(dir);
     let s1 = vec4<f32>(width, 0.0, 0.0, 0.0);
