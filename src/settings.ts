@@ -1,8 +1,25 @@
 import {Range} from "./lib/range.ts";
 
+// s.o. lets go
+function detectMob() {
+    const toMatch = [
+        /Android/i,
+        /webOS/i,
+        /iPhone/i,
+        /iPad/i,
+        /iPod/i,
+        /BlackBerry/i,
+        /Windows Phone/i
+    ];
+
+    return toMatch.some((toMatchItem) => {
+        return navigator.userAgent.match(toMatchItem);
+    });
+}
+
 export const settings = {
     // "style"
-    nEntities: 150, // fps tend to die if > 500
+    nEntities: detectMob() ? 20 : 150,
     size: new Range(0.005, 0.02, 1.0),
     length: new Range(8, 13),
     tapering: new Range(0.2, 0.25),

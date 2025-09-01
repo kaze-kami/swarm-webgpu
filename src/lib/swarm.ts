@@ -215,26 +215,55 @@ function setup(webGpu: WebGpu) {
         return vec2.fromValues(x, y)
     }
 
+    function getTouchPos(e: Touch): vec2 {
+        const [bx, by] = bounds
+        let x = (-1.0 + (e.clientX / visualViewport!.width * 2.0)) * bx
+        let y = (+1.0 - (e.clientY / visualViewport!.height * 2.0)) * by
+        return vec2.fromValues(x, y)
+    }
+
     let mouseDown = false
     let mousePos = vec2.fromValues(0.0, 0.0)
+    let paused = false
 
-    onmousedown = (e) => {
+    canvas.onmousedown = (e) => {
+        e.preventDefault()
         mousePos = getMousePos(e)
         if (e.button === 0) {
             mouseDown = true
         }
     }
-    onmouseup = (e) => {
+    canvas.onmouseup = (e) => {
+        e.preventDefault()
         if (e.button === 0) {
             mouseDown = false
         }
     }
-
-    onmousemove = (e) => {
+    canvas.onmousemove = (e) => {
+        e.preventDefault()
         mousePos = getMousePos(e)
     }
 
-    let paused = false
+    canvas.ontouchmove = (e) => {
+        e.preventDefault()
+        const touch = e.touches[0]
+        if (touch) {
+            mousePos = getTouchPos(touch)
+        }
+    }
+    canvas.ontouchend = (e) => {
+        e.preventDefault()
+        mouseDown = false
+    }
+    canvas.ontouchstart = (e) => {
+        e.preventDefault()
+        const touch = e.touches[0]
+        if (touch) {
+            mouseDown = true
+            mousePos = getTouchPos(touch)
+        }
+    }
+
     onkeydown = (e) => {
         if (e.key == ' ') {
             paused = !paused
